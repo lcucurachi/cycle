@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prediction tests</title>
+  <style>
+    body { font: 15px/1.5 system-ui, sans-serif; margin: 16px; background: #fff; color: #222; }
+    .pass { color: #1a7f37; } .fail { color: #c0392b; font-weight: 600; }
+    pre { white-space: pre-wrap; margin: 0 0 0 1.5em; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>Prediction tests</h1>
+  <p id="summary">Running…</p>
+  <div id="out"></div>
+  <script type="module">
+    import { analyze, loggedDays } from '../js/predict.js';
+    import { buildICS, androidIntentUrl, calendarState, googleCalendarUrl } from '../js/calendar.js';
+    import { addDays, fmt, fmtRange } from '../js/dates.js';
+    import { parseBackup, cleanSettings } from '../js/storage.js';
+
+    const out = document.getElementById('out');
+    let passed = 0, failed = 0;
+    function test(name, fn) {
+      try { fn(); passed++; out.insertAdjacentHTML('beforeend', `<div class="pass">✓ ${name}</div>`); }
+      catch (e) { failed++; out.insertAdjacentHTML('beforeend', `<div class="fail">✗ ${name}</div><pre>${e.message}</pre>`); }
+    }
+    const eq = (a, b, msg = '') => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${msg} expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`); };
+    const ok = (c, msg) => { if (!c) throw new Error(msg); };
+
+    /** Periods starting at `first`, separated by the given cycle lengths, each `len` days long */
+    function series(first, lengths, len = 5) {
+      const out = [{ start: first, end: addDays(first, len - 1) }];
+      let d = first;
+      for (const l of lengths) { d = addDays(d, l); out.push({ start: d, end: addDays(d, len - 1) }); }
+      return out;
+    }
+    const S = { cycleLength: 29, periodLength: 5, installId: 'test', eventTitle: '🌸', reminder: 2, calendarCount: 12 };
+
+    test('Dates shown as dd/mm/yyyy, ranges shortened', () => {
+      eq(fmt('2026-11-05'), '05/11/2026');
+      eq(fmtRange('2026-11-24', '2026-11-24'), '24/11/2026');
+      eq(fmtRange('2026-11-24', '2026-12-01'), '24/11 – 01/12/2026');
+      eq(fmtRange('2026-12-30', '2027-01-03'), '30/12/2026 – 03/01/2027');
+    });
+
+    test('No data → empty',() => eq(analyze([], S, '2026-11-24').status, 'empty'));
+
+    test('One period → uses the 29-day setting', () => {
+      const p = analyze([{ start: '2026-11-01', end: '2026-11-05' }], S, '2026-11-10');
+      eq(p.next.start, '2026-11-30');
+      eq(p.basedOn, 0);
+      eq(p.spread, 4);
+      eq(p.status, 'normal');
+      eq(p.cycleDay, 10);
+    });
+
+    test('Regular 28-day cycles → 28 days, ±1', () => {
+      const periods = series('2026-05-01', [28, 28, 28, 28, 28, 28]);
+      const p = analyze(periods, S, addDays(periods.at(-1).start, 10));
+      eq(p.cycleLength, 28);
+      eq(p.spread, 1);
+      eq(p.basedOn, 6);
+      eq(p.next.start, addDays(periods.at(-1).start, 28));
+    });
+
+    test('Few cycles → setting still counts (blend)', () => {
+      const periods = series('2026-09-01', [25]);
+      const p = analyze(periods, S, '2026-10-01');
+      // (2*29 + 1*25) / 3 = 27.67 → 28
+      eq(p.cycleLength, 28);
+    });
+
+    test('Forgotten period (double-length cycle) is left out', () => {
+      const periods = series('2026-01-01', [28, 28, 28, 56, 28]);
+      const p = analyze(periods, S, addDays(periods.at(-1).start, 5));
+      eq(p.cycles.map((c) => c.kind), ['normal', 'normal', 'normal', 'missed', 'normal']);
+      eq(p.basedOn, 4);
+      eq(p.cycleLength, 28);
+      eq(p.prompts.length, 1);
+      eq(p.prompts[0].guess, addDays(p.prompts[0].start, 28));
+    });
+
+    test('Confirmed long cycle counts again', () => {
+      const periods = series('2026-01-01', [28, 28, 28, 56, 28]);
+      const confirmed = [periods[3].start];
+      const p = analyze(periods, { ...S, confirmedCycles: confirmed }, addDays(periods.at(-1).start, 5));
+      eq(p.cycles[3].kind, 'normal');
+      eq(p.prompts.length, 0);
+    });
+
+    test('Short (<15 days) and gap (>90 days) cycles are left out', () => {
+      const periods = series('2025-01-01', [28, 10, 28, 120, 28]);
+      const p = analyze(periods, S, addDays(periods.at(-1).start, 5));
+      eq(p.cycles.map((c) => c.kind), ['normal', 'short', 'normal', 'gap', 'normal']);
+    });
+
+    test('Irregular cycles → wider range', () => {
+      const periods = series('2026-01-01', [24, 34, 26, 35, 25, 33]);
+      const p = analyze(periods, S, addDays(periods.at(-1).start, 3));
+      ok(p.spread >= 4, `spread ${p.spread} should be ≥ 4`);
+    });
+
+    test('Late period → forecast moves forward', () => {
+      const periods = series('2026-07-01', [28, 28, 28]);
+      const last = periods.at(-1).start;
+      const today = addDays(last, 40);
+      const p = analyze(periods, S, today);
+      eq(p.status, 'late');
+      ok(p.daysLate > 0, 'daysLate > 0');
+      ok(p.next.start > today, 'next start is after today');
+      ok(p.next.low > today, 'range starts after today');
+    });
+
+    test('Due within the range', () => {
+      const periods = series('2026-07-01', [28, 28, 28]);
+      const p = analyze(periods, S, addDays(periods.at(-1).start, 28));
+      eq(p.status, 'due');
+    });
+
+    test('Period started today with no end → ongoing period', () => {
+      const p = analyze([{ start: '2026-10-01', end: '2026-10-05' }, { start: '2026-10-29', end: null }], S, '2026-10-31');
+      eq(p.status, 'period');
+      eq(p.ongoing, true);
+      eq(p.cycleDay, 3);
+    });
+
+    test('Estimated end dates are not used for period length', () => {
+      const p = analyze([{ start: '2026-10-01', end: '2026-10-10', estimatedEnd: true }], { ...S, periodLength: 5 }, '2026-10-20');
+      eq(p.periodLength, 5);
+    });
+
+    test('Logged period lengths are blended in', () => {
+      const periods = series('2026-05-01', [28, 28, 28, 28], 3);
+      const p = analyze(periods, S, addDays(periods.at(-1).start, 10));
+      // (2*5 + 5*3) / 7 = 3.57 → 4
+      eq(p.periodLength, 4);
+    });
+
+    test('Logged days include open period up to today', () => {
+      const days = loggedDays([{ start: '2026-11-20', end: null }], 5, '2026-11-22');
+      eq([...days], ['2026-11-20', '2026-11-21', '2026-11-22']);
+    });
+
+    test('Fertile window = 13 days before next period, 7 days long', () => {
+      const p = analyze([{ start: '2026-11-01', end: '2026-11-05' }], S, '2026-11-02');
+      const f = p.forecast[0];
+      eq(f.ovulation, '2026-11-17');
+      eq([f.fertileStart, f.fertileEnd], ['2026-11-12', '2026-11-18']);
+    });
+
+    // ----- Calendar -----
+
+    // Starts Jul 3, Aug 1, Aug 30, Sep 28 → next expected Oct 27
+    const pred = analyze(series('2026-07-03', [29, 29, 29]), S, '2026-10-20');
+
+    test('.ics file is valid-looking', () => {
+      const ics = buildICS(pred, S);
+      ok(ics.startsWith('BEGIN:VCALENDAR\r\n'), 'starts with VCALENDAR + CRLF');
+      ok(ics.endsWith('END:VCALENDAR\r\n'), 'ends with VCALENDAR + CRLF');
+      ok(ics.includes(`RRULE:FREQ=DAILY;INTERVAL=${pred.cycleLength};COUNT=12`), 'has repeat rule');
+      ok(ics.includes('DTSTART;VALUE=DATE:20261027'), 'starts on next period');
+      ok(ics.includes('TRIGGER:-PT39H'), '2-day reminder at 9:00');
+      const enc = new TextEncoder();
+      for (const line of ics.split('\r\n')) ok(enc.encode(line).length <= 75, `line too long: ${line}`);
+      ok(!ics.includes('fertile-'), 'no fertile event when disabled');
+      ok(buildICS(pred, { ...S, showFertile: true }).includes('test-fertile@'), 'fertile event when enabled');
+    });
+
+    test('Android link encodes the repeat rule', () => {
+      const url = androidIntentUrl(pred, S);
+      ok(url.startsWith('intent:#Intent;action=android.intent.action.INSERT;'), 'intent prefix');
+      ok(url.includes('S.rrule=FREQ%3DDAILY%3BINTERVAL%3D29%3BCOUNT%3D12;'), 'encoded rrule');
+      ok(url.includes('S.browser_fallback_url=https%3A%2F%2Fcalendar.google.com'), 'Google fallback');
+      ok(url.endsWith(';end'), 'ends with ;end');
+    });
+
+    test('Google Calendar link', () => {
+      const url = new URL(googleCalendarUrl(pred, S));
+      eq(url.searchParams.get('dates'), '20261027/20261101');
+      eq(url.searchParams.get('recur'), 'RRULE:FREQ=DAILY;INTERVAL=29;COUNT=12');
+    });
+
+    test('Calendar state: ok / changed / expired / never', () => {
+      eq(calendarState(null, pred), 'never');
+      eq(calendarState({ start: pred.next.start, cycle: pred.cycleLength, count: 12 }, pred), 'ok');
+      eq(calendarState({ start: addDays(pred.next.start, -29), cycle: 29, count: 12 }, pred), 'ok');
+      eq(calendarState({ start: addDays(pred.next.start, -5), cycle: 29, count: 12 }, pred), 'changed');
+      eq(calendarState({ start: pred.next.start, cycle: 32, count: 12 }, pred), 'changed');
+      eq(calendarState({ start: addDays(pred.next.start, -29 * 6), cycle: 29, count: 3 }, pred), 'expired');
+    });
+
+    // ----- Backup import safety -----
+
+    test('Crafted backup values are dropped', () => {
+      const evil = JSON.stringify({
+        app: 'period-tracker',
+        periods: [
+          { start: '2026-10-01', end: '2026-10-05' },
+          { start: '<img src=x onerror=alert(1)>' },
+          { start: '2026-11-10', end: '2026-11-01' },
+        ],
+        settings: {
+          onboarded: true,
+          cycleLength: '<img src=x onerror=alert(1)>',
+          periodLength: 500,
+          reminder: '2',
+          installId: 'x\r\nATTACH:https://evil.example/',
+          eventTitle: 'a'.repeat(100),
+          confirmedCycles: ['2026-01-01', '<b>'],
+          calendarExport: { start: '<b>', cycle: 29, count: 12 },
+          unknownKey: 'dropped',
+        },
+      });
+      const { periods, settings } = parseBackup(evil);
+      eq(periods, [{ start: '2026-10-01', end: '2026-10-05' }]);
+      eq(settings.cycleLength, 29);
+      eq(settings.periodLength, 5);
+      eq(settings.reminder, 2);
+      ok(/^[a-z0-9]+$/.test(settings.installId), `installId cleaned: ${settings.installId}`);
+      eq(settings.eventTitle.length, 40);
+      eq(settings.confirmedCycles, ['2026-01-01']);
+      eq(settings.calendarExport, null);
+      eq(settings.onboarded, true);
+      ok(!('unknownKey' in settings), 'unknown keys dropped');
+    });
+
+    test('Valid settings survive cleaning unchanged', () => {
+      const good = { onboarded: true, cycleLength: 31, periodLength: 6, showFertile: true, hideCalendarPrompt: false,
+        eventTitle: '🌸', fertileTitle: '🌱', reminder: -1, calendarCount: 24, confirmedCycles: ['2026-02-03'],
+        calendarExport: { start: '2026-12-01', cycle: 31, count: 24, at: '2026-11-24' }, installId: 'abc123' };
+      eq(cleanSettings(good), good);
+    });
+
+    test('Not a backup → error', () => {
+      let threw = false;
+      try { parseBackup('{"app":"other","periods":[]}'); } catch { threw = true; }
+      ok(threw, 'should throw');
+    });
+
+    document.getElementById('summary').innerHTML =
+      `<b class="${failed ? 'fail' : 'pass'}">${passed} passed, ${failed} failed</b>`;
+  </script>
+</body>
+</html>
