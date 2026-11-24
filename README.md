@@ -1,70 +1,139 @@
-# Cycle – private period tracker
+<div align="center">
 
-A period tracker that runs entirely in the browser. No account, no server: all data stays on the phone (IndexedDB), and it can be installed to the home screen and used offline.
+<img src="icons/icon.svg" width="88" alt="Cycle app icon">
 
-## Features
-- Log period start/end from the Today screen or by tapping days in the calendar
-- Forecast of the next period with a likely range, late-period handling, optional fertile window
-- Detects probable forgotten logs (cycles about twice the usual length) and asks about them
-- "Add to calendar": one repeating event with a reminder
-  - **iPhone**: opens an `.ics` calendar file → *Add to Calendar*
-  - **Android**: opens the default calendar app pre-filled (falls back to a Google Calendar link)
-  - Settings → *Other ways to add* lists every method, for testing
-- Backup export/import (JSON)
+# Cycle
 
-## How the prediction works
-See the comment at the top of [`js/predict.js`](js/predict.js). In short: median of the last 6 cycles, blended with the user's "typical cycle" setting (default 29 days) while few cycles are logged; the range comes from how much cycles vary; cycles under 15 days, about double the usual, or over 90 days are left out. Based on [Bull et al. 2019](https://pmc.ncbi.nlm.nih.gov/articles/PMC6710244), [Li et al. 2021](https://pmc.ncbi.nlm.nih.gov/articles/PMC8714275) and Apple's Cycle Tracking.
+**A private period tracker that never leaves your phone.**
 
-## Files
-| Path | What it is |
+No account · No server · No tracking · Works offline
+
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-d94a72.svg)](LICENSE)
+![Dependencies: none](https://img.shields.io/badge/dependencies-none-2f9e8f.svg)
+![Installable web app](https://img.shields.io/badge/installable-PWA-7a6a70.svg)
+
+**[Try it →](https://lcucurachi.github.io/cycle/)**
+
+</div>
+
+<p align="center">
+  <img src="docs/screenshots/today.png" width="240" alt="Today screen: days until the next period and a forecast range">
+  &nbsp;
+  <img src="docs/screenshots/calendar.png" width="240" alt="Calendar screen: logged, predicted and fertile days">
+  &nbsp;
+  <img src="docs/screenshots/history.png" width="240" alt="History screen: typical cycle, variation and past cycles">
+</p>
+
+---
+
+## 🔒 Privacy first
+
+Cycle is built so that **your cycle data stays yours**. Health data is sensitive, so the app was designed around one rule: **nothing leaves the device unless you decide it should.**
+
+| | |
 |---|---|
-| `index.html` | The page |
-| `css/styles.css` | Styling (light + dark) |
-| `js/app.js` | Screens and buttons |
-| `js/predict.js` | Prediction logic |
-| `js/calendar.js` | Add-to-calendar (.ics, Android, Google link) |
-| `js/storage.js` | Saving data on the phone, backup |
-| `js/dates.js` | Date helpers |
-| `js/config.js` | Reads `app-id` / `app-version` from `index.html` |
-| `sw.js`, `manifest.webmanifest`, `icons/` | Installable app + offline |
-| `tests/index.html` | Automated tests – open in a browser |
+| 📱 **Stored only on your phone** | Data lives in the browser's own database (IndexedDB) on your device. There is no server, no cloud and no sync. |
+| 🙅 **No account** | No sign-up, email or password. Open it and start. |
+| 🚫 **No tracking** | No analytics, ads, cookies, fingerprinting or third-party scripts. No external fonts or CDNs: every file comes from the app itself. |
+| 🔌 **No outside servers** | The app only talks to the site it's hosted on, to load its own files and check for updates. Your data is never sent anywhere, and it works fully offline. |
+| 🛡️ **Locked down** | A Content-Security-Policy only allows the app's own scripts, links don't reveal where you came from (`no-referrer`), and backup files are checked before import. |
+| 🌸 **Discreet** | Calendar events are titled "🌸" by default (editable), not "Period". |
+| 🗂️ **You own your data** | Export a backup file, import it on a new phone, or delete everything with one tap. |
 
-## Run locally
+**Only when you tap something** does anything leave the app:
+- **Add to calendar** puts the forecast in your phone's calendar app. On iPhone this happens on the device. The *Google Calendar link* option (and the Android fallback) opens Google Calendar, so Google sees that event.
+- **Research links** in Settings → About open the cited papers.
+
+**Honest limits**
+- Data isn't encrypted on the device: anyone who can unlock the phone and open the browser can see it, and exported backups are readable files.
+- If you host your own copy on GitHub Pages, use a **dedicated GitHub account or organization (or a custom domain)**. All Pages sites of one account share the same web address, and the browser treats them as one site.
+
+---
+
+## ✨ Features
+
+- **Log in one tap**: "Period started today" / "Period ended today", or tap any day in the calendar
+- **Forecast** of the next period with a likely range (e.g. *29/11, likely 27/11 – 01/12*)
+- **Late-period handling**: the forecast moves forward instead of staying in the past
+- **Spots forgotten logs**: a cycle about twice your usual length triggers *"Did you forget to log a period around…?"*
+- **Add to calendar**: one repeating event with a reminder, on iPhone and Android
+- **Optional fertile-window estimate** (off by default, clearly marked as not contraception)
+- **History**: typical cycle, variation, period length and every past cycle
+- **Backup** export and import, **light and dark mode**, dates as `dd/mm/yyyy`
+
+## 📈 How predictions work
+
+1. A **cycle** is the number of days from one period start to the next.
+2. Cycles that look like logging mistakes are left out: under 15 days, about double your usual length (a forgotten period), or over 90 days.
+3. Your **typical cycle** is the median of your last 6 cycles, blended with your typical-cycle setting (default 29 days) while you have few cycles logged.
+4. The **range** (±days) comes from how much your cycles vary.
+5. The **fertile window** (optional) is a rough estimate: ovulation about 13 days before the next period.
+
+Based on [Bull et al. 2019](https://pmc.ncbi.nlm.nih.gov/articles/PMC6710244) (600,000+ cycles), [Li et al. 2021](https://pmc.ncbi.nlm.nih.gov/articles/PMC8714275) (forgotten-log detection) and Apple's Cycle Tracking. Details are in [`js/predict.js`](js/predict.js).
+
+## 📱 Install on your phone
+
+| Phone | Steps |
+|---|---|
+| **iPhone** (Safari) | Share → **Add to Home Screen**. This also protects your data from Safari's automatic cleanup of sites not visited for 7 days. |
+| **Android** (Chrome) | Menu ⋮ → **Install app** / **Add to Home screen** |
+
+## 📅 Add to calendar
+
+| Phone | What happens |
+|---|---|
+| **iPhone** | An `.ics` calendar file opens → **Add to Calendar** |
+| **Android** | The phone's calendar app opens a pre-filled repeating event (falls back to a Google Calendar link) |
+| **Anything else** | Settings → *Other ways to add*: download or share the `.ics` file |
+
+When the forecast changes noticeably, the app tells you to update the event.
+
+---
+
+## 🚀 Host your own copy
+
+1. Fork or push this repository to GitHub (ideally on a dedicated account, see [Privacy first](#-privacy-first)).
+2. **Settings → Pages → Source: Deploy from a branch → `main` / `(root)`** → Save.
+3. After a minute the app is at `https://<your-user>.github.io/<repo>/`.
+
+### App settings at the top of `index.html`
+
+| Setting | What it does |
+|---|---|
+| `app-version` | Change it when you publish an update (e.g. `1.0.1`). Shown in Settings → About; installed phones download the new files (visible from the second launch after the update). |
+| `app-id` | Prefix for everything the app stores in the browser, so other apps on the same address don't clash. Set it once before publishing: changing it later means users start with empty data. |
+
+If you add a new file, also add it to the `ASSETS` list in `sw.js` so it works offline.
+
+## 🛠 Development
+
+No build step and no dependencies: plain HTML, CSS and JavaScript modules.
+
 ```powershell
 python -m http.server 8765
 ```
-Then open http://localhost:8765 (app) and http://localhost:8765/tests/ (tests).
 
-## Publish on GitHub Pages
-1. Create a new GitHub repository and push this folder to its `main` branch.
-2. In the repository: **Settings → Pages → Source: Deploy from a branch → `main` / `(root)`** → Save.
-3. After a minute the app is at `https://<your-user>.github.io/<repo-name>/`.
+- App: http://localhost:8765
+- Tests: http://localhost:8765/tests/ (prediction, dates, calendar export and backup safety)
 
-### App settings at the top of `index.html`
-| Setting | What it does |
+| Path | What it is |
 |---|---|
-| `app-version` | Change it when you publish an update (e.g. `1.0.1`). Shown in Settings → About; makes installed phones drop their offline copy and download the new files (visible from the second launch after the update). |
-| `app-id` | Prefix for everything the app stores in the browser (database, offline copy), so other apps on the same address don't clash. Set it once before publishing; changing it later means users start with empty data. |
+| `index.html` | The page and the app settings |
+| `css/styles.css` | Styling (light + dark) |
+| `js/app.js` | Screens and buttons |
+| `js/predict.js` | Prediction logic |
+| `js/calendar.js` | Add to calendar (.ics, Android, Google link) |
+| `js/storage.js` | On-device storage, validation, backup |
+| `js/dates.js` | Date helpers |
+| `js/config.js` | Reads `app-id` / `app-version` from `index.html` |
+| `sw.js`, `manifest.webmanifest`, `icons/` | Installable app + offline |
+| `tests/index.html` | Automated tests (open in a browser) |
+| `docs/screenshots/` | Images for this README |
 
-If you add a new file, also add it to the `ASSETS` list in `sw.js`.
+## ⚠️ Disclaimer
 
-### Security notes
-- **Use a dedicated GitHub account/organization (or a custom domain) for this app.** All Pages sites of one account share the address `https://<user>.github.io`, and the browser treats them as one site: another of your Pages sites could read this app's data. The `app-id` prefix prevents accidental clashes, not deliberate reading.
-- The page only runs scripts from its own site (Content-Security-Policy) and doesn't send its address to sites it links to (`no-referrer`).
-- Backup files are checked on import: unknown or invalid values are dropped.
+Cycle gives **estimates only**. It is **not a medical device** and **not a method of contraception**. Talk to a healthcare professional about anything that worries you.
 
-## Install on a phone
-- **iPhone (Safari)**: Share → *Add to Home Screen*. Important: this also protects the data from Safari's automatic cleanup of sites not visited for 7 days.
-- **Android (Chrome)**: menu ⋮ → *Install app* / *Add to Home screen*.
+## 📄 License
 
-## Testing checklist for the calendar
-| Phone | Try | Expected |
-|---|---|---|
-| iPhone, Safari | Add to calendar | Event preview with *Add All* / *Add to Calendar* |
-| iPhone, home-screen app | Add to calendar | Same; if nothing happens, try *Other ways → Share .ics file* or *Download .ics file* |
-| Android, Chrome | Add to calendar | Calendar app opens a new event, repeating every N days |
-| Android | Other ways → Google Calendar link | Google Calendar new-event page |
-| Android, Samsung Calendar | Other ways → Download .ics file | Open the file → import |
-
-## Disclaimer
-Estimates only. Not a medical device and not contraception.
+[GNU General Public License v3.0](LICENSE): you can use, study, share and modify this app; modified versions you distribute must stay open source under the same license.

@@ -139,10 +139,23 @@ export async function shareICS(ics) {
   await navigator.share({ files: [file] });
 }
 
-/** The best method for this phone */
-export function addToCalendar(pred, settings, platform = detectPlatform()) {
-  if (platform === 'ios') openICS(buildICS(pred, settings));
-  else if (platform === 'android') window.location.href = androidIntentUrl(pred, settings);
+/** True when the app runs from the home screen (no browser buttons, no "back") */
+export const isStandalone = () =>
+  navigator.standalone === true || globalThis.matchMedia?.('(display-mode: standalone)').matches === true;
+
+/** The best method for this phone. Rejects with AbortError if the user cancels the share sheet. */
+export async function addToCalendar(pred, settings, platform = detectPlatform()) {
+  if (platform === 'ios') {
+    const ics = buildICS(pred, settings);
+    // From the home screen, leaving the page could strand the user (no back button): use the share sheet
+    if (!isStandalone()) return openICS(ics);
+    try {
+      await shareICS(ics);
+    } catch (err) {
+      if (err.name === 'AbortError') throw err;
+      downloadICS(ics);
+    }
+  } else if (platform === 'android') window.location.href = androidIntentUrl(pred, settings);
   else downloadICS(buildICS(pred, settings));
 }
 
@@ -152,6 +165,8 @@ export function addToCalendar(pred, settings, platform = detectPlatform()) {
  */
 export function calendarState(exp, pred) {
   if (!exp) return 'never';
+  // While late, the forecast moves every day by design: don't ask to re-add the event
+  if (pred.status === 'late') return 'ok';
   const next = toDay(pred.next.start);
   const k = Math.round((next - toDay(exp.start)) / exp.cycle);
   if (k < 0) return 'changed';

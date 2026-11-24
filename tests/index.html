@@ -18,7 +18,7 @@
     import { analyze, loggedDays } from '../js/predict.js';
     import { buildICS, androidIntentUrl, calendarState, googleCalendarUrl } from '../js/calendar.js';
     import { addDays, fmt, fmtRange } from '../js/dates.js';
-    import { parseBackup, cleanSettings } from '../js/storage.js';
+    import { parseBackup, cleanSettings, cleanPeriods } from '../js/storage.js';
 
     const out = document.getElementById('out');
     let passed = 0, failed = 0;
@@ -191,7 +191,28 @@
       eq(calendarState({ start: addDays(pred.next.start, -29 * 6), cycle: 29, count: 3 }, pred), 'expired');
     });
 
+    test('Calendar state: no "forecast moved" nag while late', () => {
+      const periods = series('2026-07-01', [28, 28, 28]);
+      const late = analyze(periods, S, addDays(periods.at(-1).start, 40));
+      eq(late.status, 'late');
+      const exported = { start: addDays(periods.at(-1).start, 28), cycle: 28, count: 12 };
+      eq(calendarState(exported, late), 'ok');
+      eq(calendarState(null, late), 'never');
+    });
+
     // ----- Backup import safety -----
+
+    test('Duplicate and overlapping periods are dropped, order fixed', () => {
+      const out = cleanPeriods([
+        { start: '2026-11-01', end: '2026-11-05' },
+        { start: '2026-10-01', end: '2026-10-05' },
+        { start: '2026-10-01', end: '2026-10-04' },   // duplicate start
+        { start: '2026-10-03', end: null },           // starts inside the previous one
+        { start: '2026-10-29', end: null },
+        { start: '2026-10-29', end: '2026-11-02' },   // duplicate of an open period
+      ]);
+      eq(out.map((p) => p.start), ['2026-10-01', '2026-10-29', '2026-11-01']);
+    });
 
     test('Crafted backup values are dropped', () => {
       const evil = JSON.stringify({

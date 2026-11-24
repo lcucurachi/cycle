@@ -62,12 +62,22 @@ export function cleanSettings(raw) {
   };
 }
 
-/** Keeps only periods with valid dates (end on or after start) */
+/**
+ * Keeps only periods with valid dates (end on or after start), sorted by start,
+ * without duplicate start dates or periods that begin inside the previous one.
+ */
 export function cleanPeriods(raw) {
   if (!Array.isArray(raw)) return [];
-  return raw
+  const valid = raw
     .filter((p) => p && isDate(p.start) && (p.end == null || (isDate(p.end) && p.end >= p.start)))
-    .map((p) => ({ start: p.start, end: p.end ?? null, ...(p.estimatedEnd === true ? { estimatedEnd: true } : {}) }));
+    .map((p) => ({ start: p.start, end: p.end ?? null, ...(p.estimatedEnd === true ? { estimatedEnd: true } : {}) }))
+    .sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+  const kept = [];
+  for (const p of valid) {
+    const prev = kept[kept.length - 1];
+    if (!prev || p.start > (prev.end ?? prev.start)) kept.push(p);
+  }
+  return kept;
 }
 
 // ---------- IndexedDB ----------

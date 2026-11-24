@@ -122,8 +122,8 @@ async function finishOnboarding(form) {
   const s = state.settings;
   // The iPhone date wheel ignores the "max" limit, so check for future dates here
   if (f.get('last') && f.get('last') > state.today) return toast('The date can\'t be in the future.');
-  s.cycleLength = Math.min(60, Math.max(15, Number(f.get('cycle')) || 29));
-  s.periodLength = Math.min(12, Math.max(1, Number(f.get('period')) || 5));
+  s.cycleLength = Math.min(60, Math.max(15, Math.round(Number(f.get('cycle'))) || 29));
+  s.periodLength = Math.min(12, Math.max(1, Math.round(Number(f.get('period'))) || 5));
   s.onboarded = true;
   const last = f.get('last');
   if (last && last <= state.today) {
@@ -352,16 +352,27 @@ async function commit(msg) {
 async function startPeriod(d) {
   if (d > state.today) return toast('You can log days up to today.');
   if (periodContaining(d)) return toast('That day is already part of a logged period.');
-  // A period that starts a few days later: the user is correcting its start
+  // A period that starts a few days later: the user is probably correcting its start
   const later = state.periods.find((p) => p.start > d && diffDays(d, p.start) <= 7);
+  const close = state.periods.find((p) => p !== later && Math.abs(diffDays(p.start, d)) < MIN_CYCLE);
+  if (close) return toast(`Too close to the period that started ${fmt(close.start)}. Edit that one instead.`);
   if (later) {
-    later.start = d;
+    if (!confirm(`Move the start of the period from ${fmt(later.start)} to ${fmt(d)}?`)) return;
+    renameStart(later, d);
     return commit(`Start moved to ${fmt(d)}`);
   }
-  const close = state.periods.find((p) => Math.abs(diffDays(p.start, d)) < MIN_CYCLE);
-  if (close) return toast(`Too close to the period that started ${fmt(close.start)}. Edit that one instead.`);
   state.periods.push({ start: d, end: null });
   return commit(`Period start logged: ${fmt(d)}`);
+}
+
+/** Change a period's start, keeping "No, it was real" answers attached to it */
+function renameStart(period, newStart) {
+  const s = state.settings;
+  if (s.confirmedCycles?.includes(period.start)) {
+    s.confirmedCycles = s.confirmedCycles.map((x) => (x === period.start ? newStart : x));
+    saveSettings(s);
+  }
+  period.start = newStart;
 }
 
 async function endPeriod(d, start) {
@@ -381,7 +392,7 @@ async function endPeriod(d, start) {
 async function setStart(oldStart, d) {
   const P = state.periods.find((p) => p.start === oldStart);
   if (!P) return;
-  P.start = d;
+  renameStart(P, d);
   if (P.end && P.end < d) { P.end = null; delete P.estimatedEnd; }
   return commit(`Start moved to ${fmt(d)}`);
 }
@@ -533,24 +544,38 @@ async function addToCalendar(method) {
   const p = state.pred;
   const s = state.settings;
   if (p.status === 'empty') return toast('Log a period first.');
-  const previous = s.calendarExport;
-  // Save before opening, because some methods leave the page
-  s.calendarExport = { start: p.next.start, cycle: p.cycleLength, count: s.calendarCount || 12, at: state.today };
-  await saveSettings(s);
+  // What will be added; only saved once the user confirms they actually added it
+  pendingExport = { start: p.next.start, cycle: p.cycleLength, count: s.calendarCount || 12, at: state.today };
   try {
-    if (method === 'auto') cal.addToCalendar(p, s);
+    if (method === 'auto') await cal.addToCalendar(p, s);
     else if (method === 'open-ics') cal.openICS(cal.buildICS(p, s));
     else if (method === 'download-ics') cal.downloadICS(cal.buildICS(p, s));
     else if (method === 'share-ics') await cal.shareICS(cal.buildICS(p, s));
     else if (method === 'android') window.location.href = cal.androidIntentUrl(p, s);
     else if (method === 'google') window.open(cal.googleCalendarUrl(p, s), '_blank', 'noopener');
   } catch (err) {
-    s.calendarExport = previous;
-    await saveSettings(s);
+    pendingExport = null;
     if (err.name !== 'AbortError') toast(err.message);
     return;
   }
-  setTimeout(render, 300);
+  // Shown under the calendar app; visible when the user comes back
+  openSheet(`<h2>Did you add it to your calendar?</h2>
+    <p class="muted">Tap "Yes" once the ${esc(s.eventTitle)} event is in your calendar, so the app stops reminding you.</p>
+    <div class="btn-row"><button data-action="cal-not-added">Not yet</button>
+    <button class="btn-primary" data-action="cal-added">Yes, added</button></div>`);
+}
+
+let pendingExport = null;
+
+async function confirmCalendarAdded(added) {
+  if (added && pendingExport) {
+    state.settings.calendarExport = pendingExport;
+    await saveSettings(state.settings);
+  }
+  pendingExport = null;
+  closeSheet();
+  render();
+  if (added) toast('Great, the app will tell you if the forecast changes');
 }
 
 // ---------- Backup ----------
@@ -619,6 +644,8 @@ document.addEventListener('click', (e) => {
     case 'month': shiftMonth(Number(el.dataset.delta)); return render();
     case 'goto': state.tab = el.dataset.tab; render(); return window.scrollTo(0, 0);
     case 'cal': return addToCalendar(method);
+    case 'cal-added': return confirmCalendarAdded(true);
+    case 'cal-not-added': return confirmCalendarAdded(false);
     case 'hide-cal-prompt': state.settings.hideCalendarPrompt = true; saveSettings(state.settings); return render();
     case 'prompt-log':
       state.tab = 'calendar';
@@ -654,7 +681,10 @@ document.addEventListener('input', (e) => {
 document.addEventListener('change', (e) => {
   if (e.target.matches('.date-field input')) return updateDateField(e.target);
   if (e.target.dataset?.setting) changeSetting(e.target);
-  if (e.target.id === 'import-file' && e.target.files[0]) importBackup(e.target.files[0]);
+  if (e.target.id === 'import-file' && e.target.files[0]) {
+    importBackup(e.target.files[0]);
+    e.target.value = ''; // so picking the same file again still works
+  }
 });
 
 // Re-render when the app is reopened on a new day
